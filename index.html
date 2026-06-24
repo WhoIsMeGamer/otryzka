@@ -33,41 +33,20 @@
             height: 100%;
             background: rgba(0, 0, 0, 0.3);
         }
-
-        .hint {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: white;
-            font-family: Arial, sans-serif;
-            font-size: 1.2rem;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 10px 20px;
-            border-radius: 25px;
-            animation: pulse 2s infinite;
-            z-index: 1;
-        }
-
-        @keyframes pulse {
-            0% { opacity: 0.7; }
-            50% { opacity: 1; }
-            100% { opacity: 0.7; }
-        }
     </style>
 </head>
 <body>
     <div class="overlay"></div>
-    <div class="hint">👆 Нажми в любом месте!</div>
 
     <script>
         const body = document.body;
-        const hint = document.querySelector('.hint');
         
         // Создаем аудио контекст
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         let audioBuffer = null;
-        let isSoundLoaded = false;
+        let isPlaying = false;
+        let currentSource = null;
+        let currentGainNode = null;
 
         // Загружаем звук
         async function loadSound() {
@@ -75,11 +54,9 @@
                 const response = await fetch('click-sound.mp3');
                 const arrayBuffer = await response.arrayBuffer();
                 audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                isSoundLoaded = true;
-                console.log('✅ Звук загружен и готов к воспроизведению');
+                console.log('✅ Звук загружен и готов');
             } catch (error) {
                 console.error('❌ Ошибка загрузки звука:', error);
-                // Пробуем альтернативный способ
                 tryAlternativeLoad();
             }
         }
@@ -93,7 +70,6 @@
                     const response = await fetch('click-sound.mp3');
                     const arrayBuffer = await response.arrayBuffer();
                     audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                    isSoundLoaded = true;
                     console.log('✅ Звук загружен альтернативным способом');
                 } catch (e) {
                     console.error('Не удалось загрузить звук');
@@ -103,8 +79,8 @@
             audio.load();
         }
 
-        // Воспроизведение звука на 100% громкости
-        function playSound(x, y) {
+        // Запуск бесконечного звука (нельзя остановить)
+        function startInfiniteSound(x, y) {
             // Активируем аудио контекст если нужно
             if (audioContext.state === 'suspended') {
                 audioContext.resume();
@@ -115,33 +91,68 @@
                 return;
             }
 
+            // Если звук уже играет - просто создаем визуальный эффект
+            if (isPlaying) {
+                createClickEffect(x, y);
+                console.log('🔊 Звук продолжает играть');
+                return;
+            }
+
             try {
                 const source = audioContext.createBufferSource();
                 source.buffer = audioBuffer;
+                source.loop = true; // Бесконечное зацикливание
                 
-                // Громкость на 100% (1.0 = максимум)
+                // Громкость на 100%
                 const gainNode = audioContext.createGain();
-                gainNode.gain.setValueAtTime(1.0, audioContext.currentTime); // 100% громкость
+                gainNode.gain.setValueAtTime(1.0, audioContext.currentTime);
                 
                 source.connect(gainNode);
                 gainNode.connect(audioContext.destination);
                 
                 source.start(0);
+                currentSource = source;
+                currentGainNode = gainNode;
+                isPlaying = true;
                 
-                // Скрываем подсказку
-                if (hint) {
-                    hint.style.opacity = '0';
-                    hint.style.transition = 'opacity 0.5s ease';
-                    setTimeout(() => {
-                        if (hint) hint.remove();
-                    }, 500);
-                }
+                console.log('🔊 Бесконечный звук запущен (остановить нельзя)');
                 
                 // Визуальный эффект
                 createClickEffect(x, y);
                 
+                // Защита от случайной остановки
+                source.onended = (event) => {
+                    // Если звук закончился не по нашей воле - перезапускаем
+                    if (isPlaying && event.target === currentSource) {
+                        console.log('⚠️ Звук прерван, перезапускаю...');
+                        setTimeout(() => {
+                            if (isPlaying) {
+                                startInfiniteSound(window.innerWidth/2, window.innerHeight/2);
+                            }
+                        }, 100);
+                    }
+                };
+                
+                // Блокируем все способы остановки
+                window.addEventListener('beforeunload', () => {
+                    // Даже при уходе со страницы звук будет играть пока страница открыта
+                });
+                
+                // Перехватываем попытки остановить аудио
+                const originalStop = source.stop;
+                source.stop = function() {
+                    console.log('🛑 Попытка остановки заблокирована');
+                    return; // Ничего не делаем
+                };
+                
             } catch (error) {
-                console.error('Ошибка воспроизведения:', error);
+                console.error('Ошибка:', error);
+                // Пробуем перезапустить через секунду
+                setTimeout(() => {
+                    if (!isPlaying) {
+                        startInfiniteSound(window.innerWidth/2, window.innerHeight/2);
+                    }
+                }, 1000);
             }
         }
 
@@ -154,7 +165,7 @@
                 width: 50px;
                 height: 50px;
                 border-radius: 50%;
-                background: radial-gradient(circle, rgba(255,255,255,0.8), rgba(255,255,255,0) 70%);
+                background: radial-gradient(circle, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0) 70%);
                 pointer-events: none;
                 z-index: 1000;
                 animation: clickRipple 0.6s ease-out;
@@ -176,7 +187,7 @@
         `;
         document.head.appendChild(style);
 
-        // Основной обработчик - работает сразу с любого места
+        // Основной обработчик - только запускает звук
         body.addEventListener('click', (e) => {
             // Активируем аудио контекст при первом клике
             if (audioContext.state === 'suspended') {
@@ -185,7 +196,7 @@
                 });
             }
             
-            playSound(e.clientX, e.clientY);
+            startInfiniteSound(e.clientX, e.clientY);
         });
 
         // Предотвращаем выделение текста
@@ -193,9 +204,32 @@
             e.preventDefault();
         });
 
+        // Блокируем клавиши, которые могут остановить звук
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' || e.key === 'Space' || e.key === 'MediaPlayPause') {
+                e.preventDefault();
+                console.log('🛑 Клавиша остановки заблокирована');
+            }
+        });
+
+        // Автозапуск при загрузке
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                startInfiniteSound(window.innerWidth/2, window.innerHeight/2);
+            }, 500);
+        });
+
+        // Перезапуск если контекст был приостановлен
+        audioContext.addEventListener('statechange', () => {
+            if (audioContext.state === 'suspended' && isPlaying) {
+                console.log('⚠️ Аудио контекст приостановлен, возобновляю...');
+                audioContext.resume();
+            }
+        });
+
         // Загружаем звук при старте
         loadSound();
-        console.log('Сайт готов! Кликайте в любом месте для воспроизведения звука на 100% громкости');
+        console.log('🔊 Сайт готов! Бесконечный звук запустится автоматически');
     </script>
 </body>
 </html>
